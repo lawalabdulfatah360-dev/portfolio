@@ -4,12 +4,9 @@ import React from "react";
 import { motion } from "framer-motion";
 import { FileText, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { usePortfolio } from "@/components/portfolio-provider";
 
-export function CVDownload() {
-  const { data } = usePortfolio();
-  const cvUrl = data.about.cvUrl || "/documents/cv.pdf";
-
+export function CVDownload({ cvUrl }: { cvUrl: string }) {
+  const cv = cvUrl || "/documents/cv.pdf";
   return (
     <section className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
       <motion.div
@@ -24,17 +21,14 @@ export function CVDownload() {
             <FileText className="h-8 w-8 text-primary" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-xl font-semibold text-foreground">
-              My Curriculum Vitae
-            </h3>
+            <h2 className="text-xl font-semibold text-foreground">My Curriculum Vitae</h2>
             <p className="text-sm text-muted-foreground">
               Full details of my education, publications, and experience.
             </p>
           </div>
         </div>
-
         <Button size="lg" asChild>
-          <a href={cvUrl} download>
+          <a href={cv} download target="_blank" rel="noopener noreferrer">
             <Download className="h-4 w-4" />
             Download PDF
           </a>

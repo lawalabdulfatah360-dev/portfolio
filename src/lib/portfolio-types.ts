@@ -7,7 +7,9 @@ import { education } from "@/data/education";
 import { publications } from "@/data/publications";
 import { certifications, memberships } from "@/data/certifications";
 import { referees } from "@/data/referees";
-import { seo } from "@/data/seo-fallback";
+import { seo } from "@/lib/seo";
+
+export type { Experience };
 
 export interface QuickFact {
   label: string;
@@ -103,7 +105,8 @@ export interface SectionVisibility {
   showRefereeContacts: boolean;
 }
 
-export interface PortfolioData {
+/** Everything that is publicly rendered on the site. */
+export interface PortfolioContent {
   about: AboutData;
   socials: SocialsData;
   skills: SkillGroup[];
@@ -116,19 +119,20 @@ export interface PortfolioData {
   referees: RefereeItem[];
   seo: SeoData;
   visibility: SectionVisibility;
+}
+
+/** Admin-side working copy: public content plus private inbox. */
+export interface PortfolioData extends PortfolioContent {
   messages: ContactMessage[];
 }
 
-export const defaultPortfolioData: PortfolioData = {
+export const defaultContent: PortfolioContent = {
   about: {
     ...about,
     profileImage: "/images/profile.jpg",
     cvUrl: "/documents/cv.pdf",
   },
-  socials: {
-    ...socials,
-    formspreeUrl: "",
-  },
+  socials: { ...socials, formspreeUrl: "" },
   skills,
   experience,
   projects,
@@ -143,8 +147,21 @@ export const defaultPortfolioData: PortfolioData = {
     publications: true,
     certifications: true,
     referees: true,
-    showRefereeContacts: true,
+    showRefereeContacts: false,
   },
-  messages: [],
 };
 
+/** Fill in any fields missing from stored data (e.g. after adding new fields). */
+export function withDefaults(
+  stored: Partial<PortfolioContent> | null
+): PortfolioContent {
+  if (!stored) return defaultContent;
+  return {
+    ...defaultContent,
+    ...stored,
+    about: { ...defaultContent.about, ...(stored.about ?? {}) },
+    socials: { ...defaultContent.socials, ...(stored.socials ?? {}) },
+    seo: { ...defaultContent.seo, ...(stored.seo ?? {}) },
+    visibility: { ...defaultContent.visibility, ...(stored.visibility ?? {}) },
+  };
+}

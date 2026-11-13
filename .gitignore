@@ -37,3 +37,6 @@ next-env.d.ts
 
 # admin password file (never commit)
 src/data/admin-auth.json
+
+# local CMS storage (dev only)
+.local-storage/

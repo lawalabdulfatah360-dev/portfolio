@@ -2,41 +2,32 @@
 
 import React from "react";
 import { motion } from "framer-motion";
-import { usePortfolio } from "@/components/portfolio-provider";
+import type { AboutData } from "@/lib/portfolio-types";
 
-export function About() {
-  const { data } = usePortfolio();
-  const { about } = data;
-
+export function About({ about }: { about: AboutData }) {
   return (
-    <section
-      id="about"
-      className="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8"
-    >
+    <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, amount: 0.2 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: "easeOut" }}
         className="space-y-8"
       >
-        <h2 className="text-3xl font-bold tracking-tight text-foreground">
+        <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
           About Me
-        </h2>
+        </h1>
 
         <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
-          {/* Bio Paragraphs (2/3) */}
           <div className="space-y-4 leading-relaxed text-muted-foreground md:col-span-2">
             {about.bio.map((paragraph, idx) => (
               <p key={idx}>{paragraph}</p>
             ))}
           </div>
 
-          {/* Quick Facts Card (1/3) */}
-          <div className="rounded-lg border border-border bg-card p-6">
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">
+          <div className="h-fit rounded-lg border border-border bg-card p-6">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-foreground">
               Quick Facts
-            </h3>
+            </h2>
             <dl className="space-y-4">
               {about.quickFacts.map((fact, idx) => (
                 <div key={`${fact.label}-${idx}`} className="space-y-1">

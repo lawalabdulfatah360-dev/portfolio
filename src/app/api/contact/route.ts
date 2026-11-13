@@ -1,80 +1,50 @@
 import { NextResponse } from "next/server";
-import {
-  readPortfolioStore,
-  writePortfolioStore,
-  verifyAdminRequest,
-} from "@/lib/store";
+import { getMessages, saveMessages } from "@/lib/content";
 import type { ContactMessage } from "@/lib/portfolio-types";
 
 export const dynamic = "force-dynamic";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function POST(request: Request) {
+  let body: { name?: unknown; email?: unknown; message?: unknown; company?: unknown };
   try {
-    const body = (await request.json()) as {
-      name?: string;
-      email?: string;
-      message?: string;
-    };
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
 
-    const name = (body.name ?? "").trim();
-    const email = (body.email ?? "").trim();
-    const message = (body.message ?? "").trim();
+  // Honeypot field: real visitors never fill it in.
+  if (typeof body.company === "string" && body.company.length > 0) {
+    return NextResponse.json({ ok: true });
+  }
 
-    if (!name || !email || !message) {
-      return NextResponse.json(
-        { error: "Name, email, and message are required." },
-        { status: 400 }
-      );
-    }
+  const name = typeof body.name === "string" ? body.name.trim().slice(0, 200) : "";
+  const email = typeof body.email === "string" ? body.email.trim().slice(0, 200) : "";
+  const message =
+    typeof body.message === "string" ? body.message.trim().slice(0, 5000) : "";
 
-    const store = await readPortfolioStore();
+  if (!name || !EMAIL_RE.test(email) || !message) {
+    return NextResponse.json(
+      { error: "Please provide your name, a valid email, and a message." },
+      { status: 400 }
+    );
+  }
+
+  try {
     const newMsg: ContactMessage = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       email,
       message,
       createdAt: new Date().toISOString(),
       read: false,
     };
-
-    store.messages = [newMsg, ...(store.messages ?? [])];
-    await writePortfolioStore(store);
-
-    return NextResponse.json({ ok: true, message: newMsg });
-  } catch {
-    return NextResponse.json(
-      { error: "Could not save message." },
-      { status: 500 }
-    );
+    const existing = await getMessages();
+    await saveMessages([newMsg, ...existing].slice(0, 500));
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to save message:", err);
+    return NextResponse.json({ error: "Could not save message." }, { status: 500 });
   }
 }
-
-export async function PATCH(request: Request) {
-  const authorized = await verifyAdminRequest(request);
-  if (!authorized) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const body = (await request.json()) as { id: string; read: boolean };
-  const store = await readPortfolioStore();
-  store.messages = (store.messages ?? []).map((m) =>
-    m.id === body.id ? { ...m, read: body.read } : m
-  );
-  await writePortfolioStore(store);
-  return NextResponse.json({ ok: true, messages: store.messages });
-}
-
-export async function DELETE(request: Request) {
-  const authorized = await verifyAdminRequest(request);
-  if (!authorized) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
-  const store = await readPortfolioStore();
-  store.messages = (store.messages ?? []).filter((m) => m.id !== id);
-  await writePortfolioStore(store);
-  return NextResponse.json({ ok: true, messages: store.messages });
-}
-

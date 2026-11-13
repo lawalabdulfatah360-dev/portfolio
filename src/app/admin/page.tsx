@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -35,8 +35,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/components/theme-provider";
-import { usePortfolio } from "@/components/portfolio-provider";
-import type { PortfolioData } from "@/lib/portfolio-types";
+import { upload } from "@vercel/blob/client";
+import {
+  defaultContent,
+  type ContactMessage,
+  type PortfolioContent,
+  type PortfolioData,
+} from "@/lib/portfolio-types";
 import { cn } from "@/lib/utils";
 
 type AdminTab =
@@ -50,18 +55,24 @@ type AdminTab =
   | "inbox"
   | "settings";
 
-const SESSION_AUTH_KEY = "portfolio_admin_password_session";
-
 export default function AdminPortalPage() {
   const { theme, toggle } = useTheme();
-  const { data: liveData, refresh, setLocalData } = usePortfolio();
 
+  const [checking, setChecking] = useState<boolean>(true);
   const [password, setPassword] = useState<string>("");
   const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>("");
+  const [loggingIn, setLoggingIn] = useState<boolean>(false);
+  const [storage, setStorage] = useState<"blob" | "local">("local");
+  const [usingDevDefault, setUsingDevDefault] = useState<boolean>(false);
+  const [loginConfigured, setLoginConfigured] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
-  const [draft, setDraft] = useState<PortfolioData>(liveData);
+  const [draft, setDraft] = useState<PortfolioData>({
+    ...defaultContent,
+    messages: [],
+  });
+  const [loaded, setLoaded] = useState<boolean>(false);
   const [hasUnsaved, setHasUnsaved] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
@@ -76,91 +87,154 @@ export default function AdminPortalPage() {
   );
 
   // Password change states
+  const [currentPass, setCurrentPass] = useState<string>("");
   const [newAdminPass, setNewAdminPass] = useState<string>("");
-
-  useEffect(() => {
-    setDraft(liveData);
-  }, [liveData]);
-
-  useEffect(() => {
-    const savedPass = sessionStorage.getItem(SESSION_AUTH_KEY);
-    if (savedPass) {
-      setPassword(savedPass);
-      setAuthenticated(true);
-    }
-  }, []);
+  const [confirmPass, setConfirmPass] = useState<string>("");
 
   const showNotice = (type: "success" | "error", text: string) => {
     setToast({ type, text });
     setTimeout(() => {
       setToast((prev) => (prev?.text === text ? null : prev));
-    }, 4000);
+    }, 5000);
   };
 
   const updateDraft = (updater: (prev: PortfolioData) => PortfolioData) => {
-    setDraft((prev) => {
-      const next = updater(prev);
-      setHasUnsaved(true);
-      return next;
-    });
+    setDraft((prev) => updater(prev));
+    setHasUnsaved(true);
+  };
+
+  const loadData = useCallback(async (): Promise<boolean> => {
+    const res = await fetch("/api/admin/data", { cache: "no-store" });
+    if (res.status === 401) {
+      setAuthenticated(false);
+      return false;
+    }
+    if (!res.ok) {
+      setAuthError("Could not load your content from storage.");
+      return false;
+    }
+    const { content, messages } = (await res.json()) as {
+      content: PortfolioContent;
+      messages: ContactMessage[];
+    };
+    setDraft({ ...content, messages });
+    setHasUnsaved(false);
+    setLoaded(true);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const res = await fetch("/api/auth/session", { cache: "no-store" });
+        const s = (await res.json()) as {
+          authenticated: boolean;
+          storage: "blob" | "local";
+          loginConfigured: boolean;
+          usingDevDefault: boolean;
+        };
+        setStorage(s.storage);
+        setLoginConfigured(s.loginConfigured);
+        setUsingDevDefault(s.usingDevDefault);
+        if (s.authenticated) {
+          setAuthenticated(true);
+          await loadData();
+        }
+      } catch {
+        setAuthError("Could not reach the server.");
+      } finally {
+        setChecking(false);
+      }
+    };
+    void init();
+  }, [loadData]);
+
+  // Warn before leaving the page with unsaved edits.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (hasUnsaved) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasUnsaved]);
+
+  const handleSessionExpired = () => {
+    setAuthenticated(false);
+    setLoaded(false);
+    setAuthError("Your session has expired. Please sign in again.");
+  };
+
+  const readError = async (res: Response, fallback: string) => {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    return data.error ?? fallback;
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
+    setLoggingIn(true);
     try {
-      const res = await fetch("/api/auth", {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
       });
       if (res.ok) {
-        sessionStorage.setItem(SESSION_AUTH_KEY, password);
+        setPassword("");
         setAuthenticated(true);
+        await loadData();
       } else {
-        setAuthError("Invalid password. Default is admin123");
+        setAuthError(await readError(res, "Incorrect password."));
       }
     } catch {
-      setAuthError("Could not verify password.");
+      setAuthError("Could not reach the server.");
+    } finally {
+      setLoggingIn(false);
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem(SESSION_AUTH_KEY);
+  const handleLogout = async () => {
+    if (hasUnsaved && !window.confirm("You have unsaved edits. Log out anyway?")) {
+      return;
+    }
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setAuthenticated(false);
-    setPassword("");
+    setLoaded(false);
+    setHasUnsaved(false);
   };
 
   const savePortfolio = async (customData?: PortfolioData) => {
     const payload = customData ?? draft;
     setSaving(true);
     try {
-      const res = await fetch("/api/portfolio", {
+      const res = await fetch("/api/admin/data", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-password": password,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) {
-        throw new Error("Failed to save changes.");
+      if (res.status === 401) {
+        handleSessionExpired();
+        return;
       }
-
-      const saved = (await res.json()) as PortfolioData;
-      setDraft(saved);
-      setLocalData(saved);
-      setHasUnsaved(false);
-      await refresh();
-      showNotice("success", "All changes saved and published live!");
-    } catch {
-      // Fallback local persistence
-      setLocalData(payload);
+      if (!res.ok) {
+        throw new Error(await readError(res, "Failed to save changes."));
+      }
+      const { content } = (await res.json()) as { content: PortfolioContent };
+      setDraft((prev) => ({ ...content, messages: prev.messages }));
       setHasUnsaved(false);
       showNotice(
         "success",
-        "Saved to local browser storage (serverless read-only fallback)."
+        storage === "blob"
+          ? "Saved! Your changes are now live on the website."
+          : "Saved locally. (Connect Vercel Blob to publish to the live site.)"
+      );
+    } catch (err) {
+      showNotice(
+        "error",
+        err instanceof Error ? err.message : "Failed to save changes."
       );
     } finally {
       setSaving(false);
@@ -171,94 +245,91 @@ export default function AdminPortalPage() {
     file: File,
     category: "profile" | "project" | "cv" | "og",
     keyId: string,
-    onUrlReady: (url: string) => void
+    onUrlReady: (url: string, downloadUrl: string) => void
   ) => {
     setUploadingKey(keyId);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("category", category);
-
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: {
-          "x-admin-password": password,
-        },
-        body: formData,
-      });
-
-      if (!res.ok) {
-        throw new Error("Upload failed");
+      if (storage === "blob") {
+        // Direct browser → Vercel Blob upload (supports large phone photos).
+        const safeName =
+          file.name.toLowerCase().replace(/[^a-z0-9.\-_]/g, "-") || "file";
+        const blob = await upload(`uploads/${category}/${safeName}`, file, {
+          access: "public",
+          handleUploadUrl: "/api/admin/blob-upload",
+        });
+        onUrlReady(blob.url, blob.downloadUrl);
+      } else {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("category", category);
+        const res = await fetch("/api/admin/upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (res.status === 401) {
+          handleSessionExpired();
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(await readError(res, "Upload failed."));
+        }
+        const result = (await res.json()) as {
+          url: string;
+          downloadUrl: string;
+        };
+        onUrlReady(result.url, result.downloadUrl);
       }
-
-      const result = (await res.json()) as { url: string };
-      onUrlReady(result.url);
+      setHasUnsaved(true);
       showNotice(
         "success",
-        `Uploaded "${file.name}"! Click "Save Changes" to publish.`
+        `Uploaded "${file.name}". Click "Save Changes" to publish it.`
       );
-    } catch {
-      showNotice("error", "File upload failed. Please try again.");
+    } catch (err) {
+      showNotice(
+        "error",
+        err instanceof Error ? `Upload failed: ${err.message}` : "Upload failed."
+      );
     } finally {
       setUploadingKey(null);
     }
   };
 
+  const updateMessages = (messages: ContactMessage[]) => {
+    setDraft((prev) => ({ ...prev, messages }));
+  };
+
   const handleToggleMessageRead = async (id: string, read: boolean) => {
-    try {
-      const res = await fetch("/api/contact", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-password": password,
-        },
-        body: JSON.stringify({ id, read }),
-      });
-      if (res.ok) {
-        const { messages } = (await res.json()) as {
-          messages: PortfolioData["messages"];
-        };
-        const updated = { ...draft, messages };
-        setDraft(updated);
-        setLocalData(updated);
-      }
-    } catch {
-      showNotice("error", "Failed to update message status.");
-    }
+    const res = await fetch("/api/admin/messages", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, read }),
+    }).catch(() => null);
+    if (res?.status === 401) return handleSessionExpired();
+    if (!res?.ok) return showNotice("error", "Failed to update message.");
+    updateMessages(((await res.json()) as { messages: ContactMessage[] }).messages);
   };
 
   const handleDeleteMessage = async (id: string) => {
-    try {
-      const res = await fetch(`/api/contact?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: {
-          "x-admin-password": password,
-        },
-      });
-      if (res.ok) {
-        const { messages } = (await res.json()) as {
-          messages: PortfolioData["messages"];
-        };
-        const updated = { ...draft, messages };
-        setDraft(updated);
-        setLocalData(updated);
-        showNotice("success", "Message deleted.");
-      }
-    } catch {
-      showNotice("error", "Could not delete message.");
-    }
+    if (!window.confirm("Delete this message permanently?")) return;
+    const res = await fetch(`/api/admin/messages?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }).catch(() => null);
+    if (res?.status === 401) return handleSessionExpired();
+    if (!res?.ok) return showNotice("error", "Could not delete message.");
+    updateMessages(((await res.json()) as { messages: ContactMessage[] }).messages);
+    showNotice("success", "Message deleted.");
   };
 
   const handleExportJson = () => {
-    const blob = new Blob([JSON.stringify(draft, null, 2)], {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { messages: _messages, ...content } = draft;
+    const blob = new Blob([JSON.stringify(content, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `abdulfatai-portfolio-backup-${new Date()
-      .toISOString()
-      .slice(0, 10)}.json`;
+    a.download = `portfolio-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -267,10 +338,10 @@ export default function AdminPortalPage() {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as PortfolioData;
-        setDraft(parsed);
-        await savePortfolio(parsed);
-        showNotice("success", "Imported portfolio backup successfully!");
+        const parsed = JSON.parse(String(reader.result)) as PortfolioContent;
+        const next: PortfolioData = { ...parsed, messages: draft.messages };
+        setDraft(next);
+        await savePortfolio(next);
       } catch {
         showNotice("error", "Invalid JSON backup file.");
       }
@@ -281,61 +352,66 @@ export default function AdminPortalPage() {
   const handleResetDefaults = async () => {
     if (
       !window.confirm(
-        "Reset all portfolio content back to original defaults? (Your inbox messages will be kept.)"
+        "Reset all portfolio content back to the original defaults? Uploaded files and inbox messages are kept."
       )
     ) {
       return;
     }
-    try {
-      const res = await fetch("/api/portfolio", {
-        method: "POST",
-        headers: { "x-admin-password": password },
-      });
-      if (res.ok) {
-        const resetData = (await res.json()) as PortfolioData;
-        setDraft(resetData);
-        setLocalData(resetData);
-        setHasUnsaved(false);
-        showNotice("success", "Portfolio reset to initial defaults.");
-      }
-    } catch {
-      showNotice("error", "Failed to reset portfolio.");
-    }
+    const res = await fetch("/api/admin/reset", { method: "POST" }).catch(
+      () => null
+    );
+    if (res?.status === 401) return handleSessionExpired();
+    if (!res?.ok) return showNotice("error", "Failed to reset portfolio.");
+    const { content } = (await res.json()) as { content: PortfolioContent };
+    setDraft((prev) => ({ ...content, messages: prev.messages }));
+    setHasUnsaved(false);
+    showNotice("success", "Portfolio reset to defaults and published.");
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newAdminPass.trim().length < 4) {
-      showNotice("error", "New password must be at least 4 characters.");
+    if (newAdminPass.length < 8) {
+      showNotice("error", "New password must be at least 8 characters.");
       return;
     }
-    try {
-      const res = await fetch("/api/auth", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "x-admin-password": password,
-        },
-        body: JSON.stringify({ newPassword: newAdminPass.trim() }),
-      });
-      if (res.ok) {
-        const updatedPass = newAdminPass.trim();
-        setPassword(updatedPass);
-        sessionStorage.setItem(SESSION_AUTH_KEY, updatedPass);
-        setNewAdminPass("");
-        showNotice("success", "Admin password updated successfully!");
-      } else {
-        showNotice("error", "Could not update password.");
-      }
-    } catch {
-      showNotice("error", "Failed to update password.");
+    if (newAdminPass !== confirmPass) {
+      showNotice("error", "New password and confirmation do not match.");
+      return;
+    }
+    const res = await fetch("/api/auth/password", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentPassword: currentPass,
+        newPassword: newAdminPass,
+      }),
+    }).catch(() => null);
+    if (!res) return showNotice("error", "Could not reach the server.");
+    if (res.ok) {
+      setCurrentPass("");
+      setNewAdminPass("");
+      setConfirmPass("");
+      showNotice(
+        "success",
+        "Password changed. Every other device has been signed out."
+      );
+    } else {
+      showNotice("error", await readError(res, "Could not update password."));
     }
   };
 
   const unreadCount = (draft.messages ?? []).filter((m) => !m.read).length;
 
+  if (checking || (authenticated && !loaded && !authError)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        Loading admin…
+      </div>
+    );
+  }
+
   // Login Gate
-  if (!authenticated) {
+  if (!authenticated || !loaded) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
         <div className="w-full max-w-md space-y-6 rounded-2xl border border-border bg-card p-8 shadow-lg">
@@ -344,48 +420,57 @@ export default function AdminPortalPage() {
               <Lock className="h-7 w-7" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Portfolio Admin Portal
+              Portfolio Admin
             </h1>
             <p className="text-sm text-muted-foreground">
-              Sign in to manage projects, upload photos &amp; CV, and edit your
-              portfolio content dynamically.
+              Sign in to edit your portfolio content.
             </p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <label
-                htmlFor="admin-password"
-                className="text-sm font-medium text-foreground"
-              >
-                Admin Password
-              </label>
-              <Input
-                id="admin-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter admin password (default: admin123)"
-                required
-              />
-            </div>
+          {!loginConfigured ? (
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+              Admin login is disabled. Add an <code>ADMIN_PASSWORD</code>{" "}
+              environment variable in your Vercel project settings, then
+              redeploy.
+            </p>
+          ) : (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <label
+                  htmlFor="admin-password"
+                  className="text-sm font-medium text-foreground"
+                >
+                  Password
+                </label>
+                <Input
+                  id="admin-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
 
-            {authError && (
-              <p className="text-xs font-medium text-red-500">{authError}</p>
-            )}
+              {authError && (
+                <p className="text-sm font-medium text-red-500" role="alert">
+                  {authError}
+                </p>
+              )}
 
-            <Button type="submit" className="w-full">
-              Unlock Admin Dashboard
-            </Button>
-          </form>
+              <Button type="submit" className="w-full" disabled={loggingIn}>
+                {loggingIn ? "Signing in…" : "Sign In"}
+              </Button>
+            </form>
+          )}
 
           <div className="flex items-center justify-between border-t border-border pt-4 text-xs text-muted-foreground">
-            <span>Default password: `admin123`</span>
-            <Link
-              href="/"
-              className="font-medium text-primary hover:underline"
-            >
-              ← Back to Portfolio
+            <span>
+              {usingDevDefault ? "Local dev password: admin123" : "\u00a0"}
+            </span>
+            <Link href="/" className="font-medium text-primary hover:underline">
+              ← Back to site
             </Link>
           </div>
         </div>
@@ -433,6 +518,16 @@ export default function AdminPortalPage() {
                 Synced
               </Badge>
             )}
+            <Badge
+              variant="outline"
+              className={cn(
+                "hidden text-xs sm:inline-flex",
+                storage === "blob" ? "border-green-500/40 text-green-600 dark:text-green-400" : "border-amber-500/40 text-amber-600 dark:text-amber-400"
+              )}
+              title={storage === "blob" ? "Saving to Vercel Blob — changes go live" : "No BLOB_READ_WRITE_TOKEN — saving to this computer only"}
+            >
+              {storage === "blob" ? "Live: Vercel Blob" : "Local storage"}
+            </Badge>
           </div>
 
           <div className="flex items-center gap-2">
@@ -549,6 +644,14 @@ export default function AdminPortalPage() {
                   making edits, click &ldquo;Save Changes&rdquo; in the top bar.
                 </p>
               </div>
+
+              {storage === "local" && (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-300">
+                  <strong>Local mode:</strong> edits and uploads are saved on this computer only.
+                  On Vercel, connect a Blob store (it sets <code>BLOB_READ_WRITE_TOKEN</code>) and your
+                  changes go live as soon as you click Save.
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div className="rounded-xl border border-border bg-card p-5">
@@ -2142,7 +2245,7 @@ export default function AdminPortalPage() {
                   Curriculum Vitae (PDF)
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Uploading a PDF here replaces `/documents/cv.pdf` across all
+                  Uploading a PDF here updates all
                   &ldquo;Download CV&rdquo; buttons on your portfolio.
                 </p>
 
@@ -2159,10 +2262,10 @@ export default function AdminPortalPage() {
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) {
-                          void handleFileUpload(f, "cv", "cv", (url) => {
+                          void handleFileUpload(f, "cv", "cv", (_url, downloadUrl) => {
                             updateDraft((prev) => ({
                               ...prev,
-                              about: { ...prev.about, cvUrl: url },
+                              about: { ...prev.about, cvUrl: downloadUrl },
                             }));
                           });
                         }
@@ -2534,16 +2637,42 @@ export default function AdminPortalPage() {
                 onSubmit={handleChangePassword}
                 className="rounded-xl border border-border bg-card p-6 space-y-4"
               >
-                <h2 className="text-lg font-semibold">Change Admin Password</h2>
-                <div className="flex flex-col gap-3 sm:flex-row">
+                <div className="space-y-1">
+                  <h2 className="text-lg font-semibold">Change Admin Password</h2>
+                  <p className="text-sm text-muted-foreground">
+                    You need your current password to set a new one. After the
+                    change, every other device is signed out and only the new
+                    password works.
+                  </p>
+                </div>
+                <div className="grid max-w-md gap-3">
                   <Input
                     type="password"
+                    autoComplete="current-password"
+                    value={currentPass}
+                    onChange={(e) => setCurrentPass(e.target.value)}
+                    placeholder="Current password"
+                    required
+                  />
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
                     value={newAdminPass}
                     onChange={(e) => setNewAdminPass(e.target.value)}
-                    placeholder="Enter new admin password (min 4 chars)"
-                    className="max-w-sm"
+                    placeholder="New password (at least 8 characters)"
+                    minLength={8}
+                    required
                   />
-                  <Button type="submit" variant="outline">
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPass}
+                    onChange={(e) => setConfirmPass(e.target.value)}
+                    placeholder="Confirm new password"
+                    minLength={8}
+                    required
+                  />
+                  <Button type="submit" variant="outline" className="w-fit">
                     Update Password
                   </Button>
                 </div>

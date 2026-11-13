@@ -2,31 +2,25 @@
 
 import React from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Download, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { usePortfolio } from "@/components/portfolio-provider";
+import type { AboutData } from "@/lib/portfolio-types";
 
-export function Hero() {
-  const { data } = usePortfolio();
-  const { about } = data;
+export function Hero({ about }: { about: AboutData }) {
   const firstName = (about.name || "Abdulfatai").split(" ")[0];
-  const profileSrc = about.profileImage || "/images/profile.jpg";
-  const cvUrl = about.cvUrl || "/documents/cv.pdf";
+  const cv = about.cvUrl || "/documents/cv.pdf";
 
   return (
-    <section
-      id="top"
-      className="mx-auto flex min-h-[90vh] max-w-6xl items-center px-4 py-16 sm:px-6 lg:px-8"
-    >
+    <section className="mx-auto flex min-h-[80vh] max-w-6xl items-center px-4 py-16 sm:px-6 lg:px-8">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: "easeOut" }}
         className="grid w-full grid-cols-1 items-center gap-12 md:grid-cols-2"
       >
-        {/* Left Column */}
         <div className="space-y-6">
           <Badge
             variant="secondary"
@@ -50,35 +44,33 @@ export function Hero() {
 
           <div className="flex flex-wrap items-center gap-4 pt-2">
             <Button size="lg" asChild>
-              <a href={cvUrl} download>
+              <a href={cv} download target="_blank" rel="noopener noreferrer">
                 <Download className="h-4 w-4" />
                 Download CV
               </a>
             </Button>
-
             <Button size="lg" variant="outline" asChild>
-              <a href="#contact">
+              <Link href="/contact">
                 <Mail className="h-4 w-4" />
                 Contact Me
-              </a>
+              </Link>
             </Button>
           </div>
 
           <div className="pt-2">
-            <a
-              href="#projects"
+            <Link
+              href="/projects"
               className="inline-flex items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
             >
               See my work →
-            </a>
+            </Link>
           </div>
         </div>
 
-        {/* Right Column */}
         <div className="flex justify-center md:justify-end">
           <div className="relative h-64 w-64 overflow-hidden rounded-full border-4 border-primary/20 shadow-lg sm:h-80 sm:w-80">
             <Image
-              src={profileSrc}
+              src={about.profileImage || "/images/profile.jpg"}
               alt={`${about.name} — ${about.role}`}
               fill
               priority

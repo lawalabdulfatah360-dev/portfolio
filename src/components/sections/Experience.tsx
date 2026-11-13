@@ -4,22 +4,14 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Briefcase } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { usePortfolio } from "@/components/portfolio-provider";
+import type { Experience as ExperienceItem } from "@/lib/portfolio-types";
 
-export function Experience() {
-  const { data } = usePortfolio();
-  const { experience } = data;
-
+export function Experience({ experience }: { experience: ExperienceItem[] }) {
   return (
-    <section
-      id="experience"
-      className="mx-auto max-w-6xl px-4 py-20 sm:px-6 lg:px-8"
-    >
+    <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="space-y-10">
         <div className="space-y-2">
-          <h2 className="text-3xl font-bold tracking-tight text-foreground">
-            Experience
-          </h2>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">Experience</h1>
           <p className="text-muted-foreground">
             Where I&apos;ve applied statistics to real-world problems.
           </p>
@@ -32,21 +24,15 @@ export function Experience() {
               initial={{ opacity: 0, y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 0.2 }}
-              transition={{
-                duration: 0.4,
-                delay: idx * 0.08,
-                ease: "easeOut",
-              }}
+              transition={{ duration: 0.4, delay: idx * 0.08, ease: "easeOut" }}
               className="relative space-y-3"
             >
-              <span className="absolute -left-[41px] top-1 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
+              <span className="absolute -left-[45px] top-1 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <Briefcase className="h-3 w-3" />
               </span>
 
               <div className="flex flex-col justify-between gap-1 sm:flex-row sm:items-center">
-                <h3 className="text-lg font-semibold text-foreground">
-                  {job.role}
-                </h3>
+                <h2 className="text-lg font-semibold text-foreground">{job.role}</h2>
                 <span className="text-sm text-muted-foreground">
                   {job.start} – {job.end}
                 </span>
@@ -57,16 +43,12 @@ export function Experience() {
               </p>
 
               <ul className="list-outside list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
-                {job.bullets.map((bullet, bIdx) => (
-                  <li key={bIdx}>{bullet}</li>
-                ))}
+                {job.bullets.map((bullet, bIdx) => <li key={bIdx}>{bullet}</li>)}
               </ul>
 
               <div className="flex flex-wrap gap-2 pt-1">
                 {job.tech.map((t, tIdx) => (
-                  <Badge key={`${t}-${tIdx}`} variant="outline" className="text-xs">
-                    {t}
-                  </Badge>
+                  <Badge key={`${t}-${tIdx}`} variant="outline" className="text-xs">{t}</Badge>
                 ))}
               </div>
             </motion.div>
