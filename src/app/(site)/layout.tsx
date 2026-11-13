@@ -1,6 +1,7 @@
 import React from "react";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
+import { FrontendAdminBar } from "@/components/admin/FrontendAdminBar";
 import { getContent } from "@/lib/content";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export default async function SiteLayout({
         {children}
       </main>
       <Footer name={about.name} socials={socials} />
+      <FrontendAdminBar />
     </>
   );
 }

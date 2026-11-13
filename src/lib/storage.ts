@@ -1,15 +1,13 @@
 /**
  * Storage layer (server-only).
  *
- * - Production / any env with BLOB_READ_WRITE_TOKEN: Vercel Blob.
- * - Local dev without a token: files in ./.local-storage (git-ignored).
- *
- * JSON documents are written with a random suffix on every save and the
- * previous versions are deleted. Each version therefore has a unique,
- * unguessable URL, so readers never get a stale CDN copy and private
- * documents (password hash, inbox) can't be found without the token.
+ * 1. When BLOB_READ_WRITE_TOKEN is set: uses Vercel Blob (permanent cloud storage).
+ * 2. Local development / local server: uses ./.local-storage on disk.
+ * 3. Serverless without BLOB_READ_WRITE_TOKEN: uses os.tmpdir() + inline data URLs
+ *    for images so uploads and edits never crash with EROFS on read-only disks.
  */
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 import { put, list, del } from "@vercel/blob";
 
@@ -21,8 +19,12 @@ const BLOB_PREFIX: Record<DocKey, string> = {
   auth: "cms/private/auth",
 };
 
-const LOCAL_DIR = path.join(process.cwd(), ".local-storage");
-const LOCAL_UPLOADS = path.join(LOCAL_DIR, "uploads");
+function getLocalDir(): string {
+  if (process.env.VERCEL === "1") {
+    return path.join(os.tmpdir(), "portfolio-cms-storage");
+  }
+  return path.join(process.cwd(), ".local-storage");
+}
 
 export function storageMode(): "blob" | "local" {
   return process.env.BLOB_READ_WRITE_TOKEN ? "blob" : "local";
@@ -39,17 +41,21 @@ async function listDocBlobs(key: DocKey) {
 
 export async function readJson<T>(key: DocKey): Promise<T | null> {
   if (storageMode() === "blob") {
-    const blobs = await listDocBlobs(key);
-    const latest = blobs[0];
-    if (!latest) return null;
-    // URL is unique per version, so it is safe to cache.
-    const res = await fetch(latest.url);
-    if (!res.ok) return null;
-    return (await res.json()) as T;
+    try {
+      const blobs = await listDocBlobs(key);
+      const latest = blobs[0];
+      if (!latest) return null;
+      const res = await fetch(latest.url, { cache: "no-store" });
+      if (!res.ok) return null;
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
   }
 
   try {
-    const raw = await fs.readFile(path.join(LOCAL_DIR, `${key}.json`), "utf-8");
+    const dir = getLocalDir();
+    const raw = await fs.readFile(path.join(dir, `${key}.json`), "utf-8");
     return JSON.parse(raw) as T;
   } catch {
     return null;
@@ -72,8 +78,9 @@ export async function writeJson<T>(key: DocKey, data: T): Promise<void> {
     return;
   }
 
-  await fs.mkdir(LOCAL_DIR, { recursive: true });
-  await fs.writeFile(path.join(LOCAL_DIR, `${key}.json`), body, "utf-8");
+  const dir = getLocalDir();
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, `${key}.json`), body, "utf-8");
 }
 
 function safeFileName(name: string): string {
@@ -89,7 +96,6 @@ export interface UploadResult {
   downloadUrl: string;
 }
 
-/** Server-side upload (used in local mode, and for small files in blob mode). */
 export async function saveUpload(
   file: File,
   folder: string
@@ -106,22 +112,28 @@ export async function saveUpload(
     return { url: blob.url, downloadUrl: blob.downloadUrl };
   }
 
+  // On Vercel without Blob configured yet, inline as a base64 Data URI so
+  // images/files work across serverless invocations without 404s.
+  if (process.env.VERCEL === "1") {
+    const mime = file.type || "application/octet-stream";
+    const dataUrl = `data:${mime};base64,${buffer.toString("base64")}`;
+    return { url: dataUrl, downloadUrl: dataUrl };
+  }
+
+  const uploadsDir = path.join(getLocalDir(), "uploads");
   const stored = `${Date.now()}-${name}`;
-  await fs.mkdir(LOCAL_UPLOADS, { recursive: true });
-  await fs.writeFile(path.join(LOCAL_UPLOADS, stored), buffer);
+  await fs.mkdir(uploadsDir, { recursive: true });
+  await fs.writeFile(path.join(uploadsDir, stored), buffer);
   const url = `/api/local-media/${stored}`;
   return { url, downloadUrl: url };
 }
 
-export async function readLocalUpload(
-  name: string
-): Promise<Buffer | null> {
-  // basename() prevents path traversal
+export async function readLocalUpload(name: string): Promise<Buffer | null> {
   const safe = path.basename(name);
   try {
-    return await fs.readFile(path.join(LOCAL_UPLOADS, safe));
+    const uploadsDir = path.join(getLocalDir(), "uploads");
+    return await fs.readFile(path.join(uploadsDir, safe));
   } catch {
     return null;
   }
 }
-
